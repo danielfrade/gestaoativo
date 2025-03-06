@@ -1,4 +1,4 @@
-﻿# Script de Gestão de Ativos de Equipamentos no Domínio
+# Script de Gestão de Ativos de Equipamentos no Domínio
 # Autor: Daniel Vocurca Frade
 # Data: 06/03/2025
 
@@ -33,64 +33,79 @@ function Show-Menu {
 function Get-Inventory {
     Write-Host "Coletando informações do Active Directory no domínio $Domain..." -ForegroundColor Yellow
 
-    # Buscar computadores e usuários apenas na OU especificada
-    $computers = Get-ADComputer -Filter * -SearchBase $BaseOU -Properties Name, OperatingSystem, LastLogonDate, DistinguishedName -Server $Domain -ErrorAction SilentlyContinue
-    $users = Get-ADUser -Filter * -SearchBase $BaseOU -Properties SamAccountName, Enabled, Department, LastLogonDate, DistinguishedName -Server $Domain -ErrorAction SilentlyContinue
     $inventory = @()
+    try {
+        # Buscar computadores com timeout e progresso
+        Write-Host "Buscando computadores na OU $BaseOU..." -ForegroundColor Yellow
+        $computers = Get-ADComputer -Filter * -SearchBase $BaseOU -Properties Name, OperatingSystem, LastLogonDate, DistinguishedName -Server $Domain -ErrorAction Stop
+        if (-not $computers) {
+            Write-Host "Nenhum computador encontrado na OU $BaseOU." -ForegroundColor Red
+            return $inventory
+        }
+        Write-Host "Encontrados $($computers.Count) computadores." -ForegroundColor Green
 
-    if (-not $computers) {
-        Write-Host "Nenhum computador encontrado na OU $BaseOU." -ForegroundColor Red
+        # Buscar usuários com timeout e progresso
+        Write-Host "Buscando usuários na OU $BaseOU..." -ForegroundColor Yellow
+        $users = Get-ADUser -Filter * -SearchBase $BaseOU -Properties SamAccountName, Enabled, Department, LastLogonDate, DistinguishedName -Server $Domain -ErrorAction Stop
+        if (-not $users) {
+            Write-Host "Nenhum usuário encontrado na OU $BaseOU." -ForegroundColor Red
+            return $inventory
+        }
+        Write-Host "Encontrados $($users.Count) usuários." -ForegroundColor Green
+
+        # Processar cada computador
+        $i = 0
+        $total = $computers.Count
+        foreach ($computer in $computers) {
+            $i++
+            Write-Progress -Activity "Processando computadores" -Status "Computador $i de $total" -PercentComplete (($i / $total) * 100)
+
+            $user = $null
+            $department = "Sem setor"
+            $userStatus = "N/A"
+
+            # Tentar associar o computador a um usuário
+            $computerName = $computer.Name
+            $lastUser = $null
+            try {
+                $lastUser = (Get-WmiObject -Class Win32_ComputerSystem -ComputerName $computerName -ErrorAction SilentlyContinue).UserName
+            } catch {
+                Write-Host "Não foi possível obter o último usuário do computador $computerName. Erro: $_" -ForegroundColor Yellow
+            }
+
+            if ($lastUser) {
+                $lastUser = $lastUser.Split('\')[-1] # Pegar apenas o SamAccountName
+                $user = $users | Where-Object { $_.SamAccountName -eq $lastUser }
+            }
+
+            # Determinar o setor
+            if ($user -and $user.Department) {
+                $department = $user.Department
+            } else {
+                $ou = $computer.DistinguishedName -split ',' | Where-Object { $_ -like "OU=*" }
+                if ($ou) { $department = ($ou[0] -split '=')[1] }
+            }
+
+            # Determinar o status do usuário
+            if ($user) {
+                $userStatus = if ($user.Enabled) { "Ativo" } else { "Inativo" }
+            }
+
+            # Criar objeto personalizado para o inventário
+            $inventory += [PSCustomObject]@{
+                ComputerName     = $computer.Name
+                OperatingSystem  = $computer.OperatingSystem
+                LastLogonDate    = $computer.LastLogonDate
+                User             = if ($user) { $user.SamAccountName } else { "N/A" }
+                Department       = $department
+                UserStatus       = $userStatus
+                OU               = $computer.DistinguishedName
+            }
+        }
+        Write-Progress -Activity "Processando computadores" -Completed
+    } catch {
+        Write-Host "Erro ao coletar informações do Active Directory: $_" -ForegroundColor Red
         return $inventory
-    }
-
-    if (-not $users) {
-        Write-Host "Nenhum usuário encontrado na OU $BaseOU." -ForegroundColor Red
-        return $inventory
-    }
-
-    foreach ($computer in $computers) {
-        $user = $null
-        $department = "Sem setor"
-        $userStatus = "N/A"
-
-        # Tentar associar o computador a um usuário (baseado no logon ou nome do computador)
-        $computerName = $computer.Name
-        $lastUser = $null
-        try {
-            $lastUser = (Get-WmiObject -Class Win32_ComputerSystem -ComputerName $computerName -ErrorAction SilentlyContinue).UserName
-        } catch {
-            Write-Host "Não foi possível obter o último usuário do computador $computerName. Erro: $_" -ForegroundColor Yellow
-        }
-
-        if ($lastUser) {
-            $lastUser = $lastUser.Split('\')[-1] # Pegar apenas o SamAccountName
-            $user = $users | Where-Object { $_.SamAccountName -eq $lastUser }
-        }
-
-        # Determinar o setor (usando o Department do usuário ou OU do computador)
-        if ($user -and $user.Department) {
-            $department = $user.Department
-        } else {
-            # Se não houver usuário ou departamento, usar a OU do computador
-            $ou = $computer.DistinguishedName -split ',' | Where-Object { $_ -like "OU=*" }
-            if ($ou) { $department = ($ou[0] -split '=')[1] }
-        }
-
-        # Determinar o status do usuário (ativo/inativo)
-        if ($user) {
-            $userStatus = if ($user.Enabled) { "Ativo" } else { "Inativo" }
-        }
-
-        # Criar objeto personalizado para o inventário
-        $inventory += [PSCustomObject]@{
-            ComputerName     = $computer.Name
-            OperatingSystem  = $computer.OperatingSystem
-            LastLogonDate    = $computer.LastLogonDate
-            User             = if ($user) { $user.SamAccountName } else { "N/A" }
-            Department       = $department
-            UserStatus       = $userStatus
-            OU               = $computer.DistinguishedName
-        }
     }
     return $inventory
 }
@@ -139,9 +154,7 @@ function List-InactiveUsers {
     }
     $inactive = $inventory | Where-Object { $_.UserStatus -eq "Inativo" }
     if ($inactive) {
-        Write-Host "`nUsuários Inativos
-
-// e Equipamentos Associados" -ForegroundColor Cyan
+        Write-Host "`nUsuários Inativos e Equipamentos Associados" -ForegroundColor Cyan
         Write-Host "----------------------------------------"
         $inactive | Format-Table ComputerName, User, Department, OperatingSystem, LastLogonDate -AutoSize
     } else {
