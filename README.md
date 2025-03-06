@@ -26,14 +26,14 @@ Um script poderoso para simplificar a gestão de ativos de TI no seu domínio Ac
 ### Clonando o Repositório  
 1. Clone este repositório:  
    ```bash
-   git clone https://github.com/seu-usuario/gestao-ativos-ad.git
+   git clone https://github.com/danielfrade/gestaoativo.git
    ```  
 
 ### Executando o Script  
 1. Abra o PowerShell como administrador.  
 2. Navegue até o diretório do script:  
    ```powershell
-   cd caminho\para\gestao-ativos-ad
+   cd caminho\para\gestaoativos
    ```  
 3. Execute o script:  
    ```powershell
