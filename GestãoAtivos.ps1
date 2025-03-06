@@ -9,6 +9,10 @@ if (-not (Get-Module -Name ActiveDirectory)) {
     exit
 }
 
+# Definir o domínio e a OU base para busca
+$Domain = ""
+$BaseOU = ""
+
 # Função para criar uma interface simples
 function Show-Menu {
     Clear-Host
@@ -27,10 +31,22 @@ function Show-Menu {
 
 # Função para obter informações de computadores e usuários
 function Get-Inventory {
-    Write-Host "Coletando informações do Active Directory..." -ForegroundColor Yellow
-    $computers = Get-ADComputer -Filter * -Properties Name, OperatingSystem, LastLogonDate, DistinguishedName
-    $users = Get-ADUser -Filter * -Properties SamAccountName, Enabled, Department, LastLogonDate, DistinguishedName
+    Write-Host "Coletando informações do Active Directory no domínio $Domain..." -ForegroundColor Yellow
+
+    # Buscar computadores e usuários apenas na OU especificada
+    $computers = Get-ADComputer -Filter * -SearchBase $BaseOU -Properties Name, OperatingSystem, LastLogonDate, DistinguishedName -Server $Domain -ErrorAction SilentlyContinue
+    $users = Get-ADUser -Filter * -SearchBase $BaseOU -Properties SamAccountName, Enabled, Department, LastLogonDate, DistinguishedName -Server $Domain -ErrorAction SilentlyContinue
     $inventory = @()
+
+    if (-not $computers) {
+        Write-Host "Nenhum computador encontrado na OU $BaseOU." -ForegroundColor Red
+        return $inventory
+    }
+
+    if (-not $users) {
+        Write-Host "Nenhum usuário encontrado na OU $BaseOU." -ForegroundColor Red
+        return $inventory
+    }
 
     foreach ($computer in $computers) {
         $user = $null
@@ -39,7 +55,13 @@ function Get-Inventory {
 
         # Tentar associar o computador a um usuário (baseado no logon ou nome do computador)
         $computerName = $computer.Name
-        $lastUser = (Get-WmiObject -Class Win32_ComputerSystem -ComputerName $computerName -ErrorAction SilentlyContinue).UserName
+        $lastUser = $null
+        try {
+            $lastUser = (Get-WmiObject -Class Win32_ComputerSystem -ComputerName $computerName -ErrorAction SilentlyContinue).UserName
+        } catch {
+            Write-Host "Não foi possível obter o último usuário do computador $computerName. Erro: $_" -ForegroundColor Yellow
+        }
+
         if ($lastUser) {
             $lastUser = $lastUser.Split('\')[-1] # Pegar apenas o SamAccountName
             $user = $users | Where-Object { $_.SamAccountName -eq $lastUser }
@@ -76,6 +98,11 @@ function Get-Inventory {
 # Função para listar por setor
 function List-ByDepartment {
     $inventory = Get-Inventory
+    if (-not $inventory) {
+        Write-Host "Nenhum dado para listar." -ForegroundColor Yellow
+        Pause
+        return
+    }
     $departments = $inventory | Group-Object Department
     foreach ($dept in $departments) {
         Write-Host "`nSetor: $($dept.Name)" -ForegroundColor Cyan
@@ -88,6 +115,11 @@ function List-ByDepartment {
 # Função para listar por usuário
 function List-ByUser {
     $inventory = Get-Inventory
+    if (-not $inventory) {
+        Write-Host "Nenhum dado para listar." -ForegroundColor Yellow
+        Pause
+        return
+    }
     $users = $inventory | Group-Object User
     foreach ($user in $users) {
         Write-Host "`nUsuário: $($user.Name)" -ForegroundColor Cyan
@@ -100,9 +132,16 @@ function List-ByUser {
 # Função para listar usuários inativos
 function List-InactiveUsers {
     $inventory = Get-Inventory
+    if (-not $inventory) {
+        Write-Host "Nenhum dado para listar." -ForegroundColor Yellow
+        Pause
+        return
+    }
     $inactive = $inventory | Where-Object { $_.UserStatus -eq "Inativo" }
     if ($inactive) {
-        Write-Host "`nUsuários Inativos e Equipamentos Associados" -ForegroundColor Cyan
+        Write-Host "`nUsuários Inativos
+
+// e Equipamentos Associados" -ForegroundColor Cyan
         Write-Host "----------------------------------------"
         $inactive | Format-Table ComputerName, User, Department, OperatingSystem, LastLogonDate -AutoSize
     } else {
@@ -114,6 +153,11 @@ function List-InactiveUsers {
 # Função para exportar relatório completo
 function Export-Report {
     $inventory = Get-Inventory
+    if (-not $inventory) {
+        Write-Host "Nenhum dado para exportar." -ForegroundColor Yellow
+        Pause
+        return
+    }
     $date = Get-Date -Format "yyyyMMdd_HHmmss"
     $filePath = "C:\Relatorios\Inventario_Ativos_$date.csv"
     
